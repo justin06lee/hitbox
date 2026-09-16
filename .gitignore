@@ -396,3 +396,6 @@ $RECYCLE.BIN/
 *.msp
 *.lnk
 *.generated.props
+
+# Hitbox smoke-test project cache
+misc/hitbox/smoke_project/.godot/

@@ -1,0 +1,18 @@
+; Hitbox smoke-test project. Run with:
+;   bin/godot.macos.editor.arm64 --headless --editor --path misc/hitbox/smoke_project
+
+config_version=5
+
+[application]
+
+config/name="Hitbox Smoke"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7", "Forward Plus")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/hitbox_smoke/plugin.cfg")
+
+[rendering]
+
+renderer/rendering_method="forward_plus"

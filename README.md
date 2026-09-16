@@ -1,76 +1,73 @@
-# Godot Engine
+<div align="center">
 
-<p align="center">
-  <a href="https://godotengine.org">
-    <img src="misc/logo/logo_outlined.svg" width="400" alt="Godot Engine logo">
-  </a>
-</p>
+<img src="assets/hitbox.svg" alt="hitbox" width="340" />
 
-## 2D and 3D cross-platform game engine
+# hitbox
 
-**[Godot Engine](https://godotengine.org) is a feature-packed, cross-platform
-game engine to create 2D and 3D games from a unified interface.** It provides a
-comprehensive set of [common tools](https://godotengine.org/features), so that
-users can focus on making games without having to reinvent the wheel. Games can
-be exported with one click to a number of platforms, including the major desktop
-platforms (Linux, macOS, Windows), mobile platforms (Android, iOS), as well as
-Web-based platforms and [consoles](https://godotengine.org/consoles).
+**Cursor for game development: the Godot editor with an AI agent compiled in.**<br>
+*A fork of Godot 4.7, not a plugin. The agent reads your project, edits scenes and scripts, runs the game and reads what it printed.*
 
-## Free, open source and community-driven
+</div>
 
-Godot is completely free and open source under the very permissive [MIT license](https://godotengine.org/license).
-No strings attached, no royalties, nothing. The users' games are theirs, down
-to the last line of engine code. Godot's development is fully independent and
-community-driven, empowering users to help shape their engine to match their
-expectations. It is supported by the [Godot Foundation](https://godot.foundation/)
-not-for-profit.
+---
 
-Before being open sourced in [February 2014](https://github.com/godotengine/godot/commit/0b806ee0fc9097fa7bda7ac0109191c9c5e0a1ac),
-Godot had been developed by [Juan Linietsky](https://github.com/reduz) and
-[Ariel Manzur](https://github.com/punto-) for several years as an in-house
-engine, used to publish several work-for-hire titles.
+Hitbox is a fork of [Godot Engine](https://godotengine.org) 4.7.2 with an AI agent built into the editor binary, the way Cursor forked VS Code. It opens like Godot, builds like Godot, and every Godot project works in it unchanged. The difference is a **Hitbox** dock next to the Inspector where you talk to Claude about the project in front of you, and it does the work in the editor.
 
-![Screenshot of a 3D scene in the Godot Engine editor](https://raw.githubusercontent.com/godotengine/godot-design/master/screenshots/editor_tps_demo_1920x1080.jpg)
+## What the agent can do
 
-## Getting the engine
+Every message you send carries the editor's current context: the open scene and its root, the selected nodes, the active script and any selected text. On top of that the agent has tools over the editor:
 
-### Binary downloads
+- **Files.** List the project, read files, write files, make exact string edits, and search across all text files. Edited scripts reload in the script editor; an edited `.tscn` that is open reloads in the editor.
+- **Scenes.** Dump the open scene's node tree, read a node's non-default properties, set properties, add nodes (engine classes or instanced `.tscn` files), remove nodes, attach scripts, save, and open scenes or scripts. Every scene change goes through the editor's undo history.
+- **Running the game.** Play the main scene, the current scene or any scene, stop it, and read the Output panel, including prints and errors from the running game.
+- **Engine reference.** Pull the class reference for any engine class from this exact build: inheritance, properties with defaults, method signatures, signals and constants. The agent is told to check it before using an API it is not sure about, which is what keeps it on Godot 4 syntax.
 
-Official binaries for the Godot editor and the export templates can be found
-[on the Godot website](https://godotengine.org/download).
+The agent streams its reply and its reasoning summary into the dock, shows each tool call as it runs, and keeps going through tool calls until the task is done or you press stop.
 
-### Compiling from source
+## Build and install
 
-[See the official docs](https://docs.godotengine.org/en/latest/engine_details/development/compiling)
-for compilation instructions for every supported platform.
+Hitbox builds exactly like Godot. On macOS with Apple Silicon:
 
-## Community and contributing
+```sh
+brew install scons        # Python 3.9+ and Xcode command line tools are required too
+make                      # build, bundle Hitbox.app, install to /Applications, launch
+```
 
-Godot is not only an engine but an ever-growing community of users and engine
-developers. The main community channels are listed [on the homepage](https://godotengine.org/community).
+| Target | What it does |
+| --- | --- |
+| `make` | Build the editor, bundle it as `Hitbox.app`, copy it to `/Applications`, put `hitbox` on `$PATH`, launch it. |
+| `make build` | Compile the editor binary only, into `bin/`. |
+| `make install` | Bundle and install without launching. |
+| `make update` | Stop a running Hitbox, remove it, rebuild, reinstall and relaunch. |
+| `make smoke` | Headless editor run that sends one prompt through the dock and prints the transcript. With no API key it exercises the error path. |
 
-The best way to get in touch with the core engine developers is to join the
-[Godot Contributors Chat](https://chat.godotengine.org).
+The first build takes a while; later builds only recompile what changed. The macOS build uses Metal and does not need the Vulkan SDK. Other platforms use Godot's own build line, for example `scons platform=linuxbsd target=editor`; everything Hitbox adds is platform independent, only the Makefile is macOS specific.
 
-To get started contributing to the project, see the [contributing guide](CONTRIBUTING.md).
-This document also includes guidelines for reporting bugs.
+## Setup
 
-## Documentation and demos
+Hitbox talks to the Anthropic API directly from the editor. Give it a key in any of these ways:
 
-The official documentation is hosted on [Read the Docs](https://docs.godotengine.org).
-It is maintained by the Godot community in its own [GitHub repository](https://github.com/godotengine/godot-docs).
+1. Paste it into the field at the bottom of the Hitbox dock the first time you open it.
+2. Editor Settings, then **Hitbox > Anthropic > API Key**.
+3. Set the `ANTHROPIC_API_KEY` environment variable before launching.
 
-The [class reference](https://docs.godotengine.org/en/latest/classes/)
-is also accessible from the Godot editor.
+The model picker at the top of the dock switches between Claude Opus 5 (the default), Claude Sonnet 5, Claude Fable 5.1 and Claude Haiku 4.5. The reasoning effort and the maximum number of tool rounds per message live under the same settings section.
 
-We also maintain official demos in their own [GitHub repository](https://github.com/godotengine/godot-demo-projects)
-as well as a list of [awesome Godot community resources](https://github.com/godotengine/awesome-godot).
+Hitbox keeps its own editor settings, separate from Godot's, so installing it next to Godot does not touch your Godot configuration.
 
-There are also a number of other
-[learning resources](https://docs.godotengine.org/en/latest/community/tutorials.html)
-provided by the community, such as text and video tutorials, demos, etc.
-Consult the [community channels](https://godotengine.org/community)
-for more information.
+## How it is built
 
-[![Code Triagers Badge](https://www.codetriage.com/godotengine/godot/badges/users.svg)](https://www.codetriage.com/godotengine/godot)
-[![Translate on Weblate](https://hosted.weblate.org/widgets/godot-engine/-/godot/svg-badge.svg)](https://hosted.weblate.org/engage/godot-engine/?utm_source=widget)
+Everything Hitbox adds lives in one engine module, `modules/hitbox/`:
+
+- `hitbox_dock.cpp` is the chat dock and the agent loop. Each API request streams on a worker thread; tool calls run on the main thread between requests, so they can touch editor state safely.
+- `hitbox_client.cpp` is a small streaming client for the Anthropic Messages API over Godot's own HTTPS stack. No external dependencies.
+- `hitbox_tools.cpp` defines the tools the model sees and implements them against the editor: file system, scene tree, undo history, run bar, output log and the class reference.
+- `hitbox_editor_plugin.cpp` registers the editor settings and mounts the dock.
+
+The smoke test lives in `misc/hitbox/smoke_project/`: a minimal project whose editor plugin calls the dock's scriptable surface (`send_prompt`, `is_busy`, `get_transcript_text`), which any editor plugin can use too.
+
+Outside the module the fork touches two files: `version.py`, which names the product, and `editor/editor_log.h`, which gains four one-line accessors so the agent can read the Output panel. Keeping the footprint that small is deliberate. Upstream Godot releases merge in with `git fetch upstream` followed by a merge of the new stable tag.
+
+## Upstream
+
+Godot Engine is Copyright (c) 2014-present Godot Engine contributors and Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur, released under the MIT license. Hitbox keeps that license; see `LICENSE.txt` and `COPYRIGHT.txt`. Godot's own README, documentation and community live at [godotengine.org](https://godotengine.org).

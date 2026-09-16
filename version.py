@@ -1,9 +1,9 @@
-short_name = "godot"
-name = "Godot Engine"
+short_name = "hitbox"
+name = "Hitbox"
 major = 4
 minor = 7
 patch = 2
 status = "stable"
 module_config = ""
-website = "https://godotengine.org"
+website = "https://github.com/justin06lee/hitbox"
 docs = "4.7"
