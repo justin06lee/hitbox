@@ -1,0 +1,15 @@
+#!/usr/bin/env python
+from misc.utility.scons_hints import *
+
+Import("env")
+Import("env_modules")
+
+env_hitbox = env_modules.Clone()
+
+module_obj = []
+
+# Editor-only: the AI dock, the Anthropic client and the editor tools.
+if env.editor_build:
+    env_hitbox.add_source_files(module_obj, "*.cpp")
+
+env.modules_sources += module_obj

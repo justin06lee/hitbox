@@ -180,6 +180,12 @@ protected:
 
 public:
 	void add_message(const String &p_msg, MessageType p_type = MSG_TYPE_STD);
+
+	// Hitbox: read access to the message history for the AI agent.
+	int get_log_message_count() const { return messages.size(); }
+	String get_log_message_text(int p_idx) const { return messages[p_idx].text; }
+	int get_log_message_type(int p_idx) const { return messages[p_idx].type; }
+	int get_log_message_repeat(int p_idx) const { return messages[p_idx].count; }
 	void register_undo_redo(UndoRedo *p_undo_redo);
 	void deinit();
 
