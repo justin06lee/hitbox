@@ -20,6 +20,17 @@
 HitboxEditorPlugin::HitboxEditorPlugin() {
 	EditorSettings *es = EditorSettings::get_singleton();
 
+	EDITOR_DEF("hitbox/backend/mode", "auto");
+	es->add_property_hint(PropertyInfo(Variant::STRING, "hitbox/backend/mode", PROPERTY_HINT_ENUM, "auto,yagami,anthropic_api"));
+
+	EDITOR_DEF("hitbox/yagami/url", "");
+	es->add_property_hint(PropertyInfo(Variant::STRING, "hitbox/yagami/url", PROPERTY_HINT_PLACEHOLDER_TEXT, "auto: from yagami's config.json, else http://127.0.0.1:8787"));
+
+	EDITOR_DEF("hitbox/yagami/api_key", "");
+	es->add_property_hint(PropertyInfo(Variant::STRING, "hitbox/yagami/api_key", PROPERTY_HINT_PLACEHOLDER_TEXT, "auto: from yagami's config.json (ygm_...)"));
+
+	EDITOR_DEF("hitbox/yagami/auto_start", true);
+
 	EDITOR_DEF("hitbox/anthropic/api_key", "");
 	es->add_property_hint(PropertyInfo(Variant::STRING, "hitbox/anthropic/api_key", PROPERTY_HINT_PLACEHOLDER_TEXT, "sk-ant-... (falls back to the ANTHROPIC_API_KEY environment variable)"));
 

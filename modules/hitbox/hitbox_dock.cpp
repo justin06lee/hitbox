@@ -13,6 +13,7 @@
 #include "hitbox_dock.h"
 
 #include "hitbox_client.h"
+#include "hitbox_mcp_server.h"
 #include "hitbox_tools.h"
 
 #include "core/input/input_event.h"
@@ -50,10 +51,9 @@ static const HitboxModel HITBOX_MODELS[] = {
 };
 static const int HITBOX_MODEL_COUNT = sizeof(HITBOX_MODELS) / sizeof(HITBOX_MODELS[0]);
 
-static const char *HITBOX_SYSTEM_PROMPT =
+static const char *HITBOX_PROMPT_BASE =
 		"You are Hitbox, an AI game-development agent built directly into Hitbox, a fork of the Godot 4.7 editor. "
-		"You are talking with the developer inside their open project, and you have tools that read and modify that project, "
-		"inspect and edit the scene open in the editor, run the game, and read the editor's output log.\n"
+		"You are talking with the developer inside their open project.\n"
 		"\n"
 		"Every user message starts with an <editor_context> block describing what the developer is looking at: the open scene, "
 		"the selected nodes, and the active script with any selected text. Use it instead of asking for that information.\n"
@@ -62,6 +62,15 @@ static const char *HITBOX_SYSTEM_PROMPT =
 		"- This is Godot 4. Never write Godot 3 syntax. Use `@export`, `@onready`, `await`, `signal_name.connect(callable)`, "
 		"`create_tween()`, `CharacterBody2D.velocity` with `move_and_slide()`, `Input.is_action_pressed()`, and typed GDScript "
 		"where it reads naturally. `yield`, `export var`, `onready var`, `KinematicBody2D`, `instance()` and `connect(\"sig\", obj, \"method\")` do not exist.\n"
+		"- Paths are res:// project paths. Node paths are relative to the scene root, where \".\" is the root.\n"
+		"- Keep replies short and concrete.\n";
+
+static const char *HITBOX_PROMPT_TOOLS =
+		"\n"
+		"You have tools that read and modify the project, inspect and edit the scene open in the editor, run the game, and read "
+		"the editor's output log.\n"
+		"\n"
+		"Tool rules:\n"
 		"- When you are not certain about an engine API (method names, property names, signals, argument order, enum values), "
 		"call get_class_docs first. Those docs come from this exact engine build and are authoritative.\n"
 		"- Look before you edit: read a file or inspect the scene tree before changing it. For changes to existing files prefer "
@@ -72,8 +81,16 @@ static const char *HITBOX_SYSTEM_PROMPT =
 		"- Files you write are picked up by the editor automatically; no restart is needed.\n"
 		"- Verify when it matters: after meaningful gameplay changes, save_all, run_project, then get_output_log to check for "
 		"parse errors and runtime errors, then stop_project. Fix what you find.\n"
-		"- Paths are res:// project paths. Node paths are relative to the scene root, where \".\" is the root.\n"
-		"- Keep replies short and concrete: say what you changed and where. Do not paste whole files back into the chat.\n";
+		"- Say what you changed and where. Do not paste whole files back into the chat.\n";
+
+static const char *HITBOX_PROMPT_MCP_NAMES =
+		"- The tools are served by the editor's MCP server, so their names may carry a prefix, such as mcp__hitbox__read_file "
+		"for read_file. They are the same tools.\n";
+
+static const char *HITBOX_PROMPT_NO_TOOLS =
+		"\n"
+		"In this session you have no tools: the connected server cannot hand you the editor's tools. Work from the "
+		"<editor_context>, and give the developer exact code and the steps to apply it: which file, which node, which property.\n";
 
 /* ---------------------------------------------------------------------- */
 /* Construction                                                            */
@@ -170,6 +187,13 @@ HitboxDock::HitboxDock() {
 	stop_button->hide();
 	buttons->add_child(stop_button);
 
+	// Serves the editor tools to yagami; started on the first yagami request.
+	mcp_server = memnew(HitboxMcpServer);
+	mcp_server->set_name("HitboxMcpServer");
+	add_child(mcp_server);
+
+	backend = HitboxBackend::resolve();
+	EditorSettings::get_singleton()->connect("settings_changed", callable_mp(this, &HitboxDock::_on_settings_changed));
 	_update_ui();
 }
 
@@ -177,6 +201,8 @@ void HitboxDock::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("send_prompt", "text"), &HitboxDock::send_prompt);
 	ClassDB::bind_method(D_METHOD("is_busy"), &HitboxDock::is_busy);
 	ClassDB::bind_method(D_METHOD("get_transcript_text"), &HitboxDock::get_transcript_text);
+	ClassDB::bind_method(D_METHOD("get_backend_label"), &HitboxDock::get_backend_label);
+	ClassDB::bind_method(D_METHOD("get_mcp_call_count"), &HitboxDock::get_mcp_call_count);
 }
 
 void HitboxDock::send_prompt(const String &p_text) {
@@ -186,6 +212,14 @@ void HitboxDock::send_prompt(const String &p_text) {
 
 String HitboxDock::get_transcript_text() const {
 	return transcript->get_parsed_text();
+}
+
+String HitboxDock::get_backend_label() const {
+	return backend.label;
+}
+
+int HitboxDock::get_mcp_call_count() const {
+	return mcp_server ? mcp_server->get_call_count() : 0;
 }
 
 HitboxDock::~HitboxDock() {
@@ -201,12 +235,7 @@ void HitboxDock::_notification(int p_what) {
 			new_chat_button->set_button_icon(get_editor_theme_icon(SNAME("New")));
 			stop_button->set_button_icon(get_editor_theme_icon(SNAME("Stop")));
 			transcript->add_theme_font_override("mono_font", get_theme_font(SNAME("output_source"), EditorStringName(EditorFonts)));
-			if (transcript_empty) {
-				transcript->clear();
-				transcript->push_color(_color(SNAME("font_disabled_color")));
-				transcript->add_text(TTR("Ask Hitbox to build, fix or explain anything in this project. It can read and edit files, change the open scene, run the game and read the output log."));
-				transcript->pop();
-			}
+			_show_intro();
 		} break;
 	}
 }
@@ -215,13 +244,48 @@ void HitboxDock::_notification(int p_what) {
 /* Settings                                                                */
 /* ---------------------------------------------------------------------- */
 
-String HitboxDock::_get_api_key() const {
-	String key = EDITOR_GET("hitbox/anthropic/api_key");
-	key = key.strip_edges();
-	if (key.is_empty()) {
-		key = OS::get_singleton()->get_environment("ANTHROPIC_API_KEY").strip_edges();
+void HitboxDock::_on_settings_changed() {
+	if (busy) {
+		return; // Picked up by the next send.
 	}
-	return key;
+	backend = HitboxBackend::resolve();
+	_show_intro();
+	_update_ui();
+}
+
+void HitboxDock::_show_intro() {
+	if (!transcript_empty) {
+		return;
+	}
+	String intro = TTR("Ask Hitbox to build, fix or explain anything in this project. It can read and edit files, change the open scene, run the game and read the output log.");
+	if (backend.kind == HitboxBackendConfig::KIND_YAGAMI) {
+		intro += "\n\n" + vformat(TTR("Using %s, which runs on your Claude Code sign-in."), backend.label);
+		if (!backend.autostart_via.is_empty()) {
+			intro += " " + vformat(TTR("If it is not running, Hitbox starts it with %s."), backend.autostart_via);
+		}
+	} else {
+		intro += "\n\n" + TTR("Using the Anthropic API.");
+	}
+	if (!backend.problem.is_empty()) {
+		intro += "\n\n" + backend.problem;
+	}
+	transcript->clear();
+	transcript->push_color(_color(SNAME("font_disabled_color")));
+	transcript->add_text(intro);
+	transcript->pop();
+}
+
+String HitboxDock::_system_prompt() const {
+	String prompt = String(HITBOX_PROMPT_BASE);
+	if (backend.kind == HitboxBackendConfig::KIND_ANTHROPIC) {
+		prompt += HITBOX_PROMPT_TOOLS;
+	} else if (yagami_tools) {
+		prompt += HITBOX_PROMPT_TOOLS;
+		prompt += HITBOX_PROMPT_MCP_NAMES;
+	} else {
+		prompt += HITBOX_PROMPT_NO_TOOLS;
+	}
+	return prompt;
 }
 
 int HitboxDock::_get_model_index() const {
@@ -250,6 +314,8 @@ void HitboxDock::_save_key() {
 	EditorSettings::save();
 	key_edit->set_text("");
 	_set_status("");
+	backend = HitboxBackend::resolve();
+	_show_intro();
 	_update_ui();
 }
 
@@ -264,7 +330,7 @@ Color HitboxDock::_color(const StringName &p_name) const {
 void HitboxDock::_update_ui() {
 	send_button->set_visible(!busy);
 	stop_button->set_visible(busy);
-	key_row->set_visible(_get_api_key().is_empty());
+	key_row->set_visible(backend.kind == HitboxBackendConfig::KIND_ANTHROPIC && backend.api_key.is_empty());
 }
 
 void HitboxDock::_set_status(const String &p_text) {
@@ -307,6 +373,7 @@ void HitboxDock::_toggle_fence() {
 		transcript->push_mono();
 		transcript->push_color(_color(SNAME("font_readonly_color")));
 		in_code_fence = true;
+		skipping_fence_tag = true;
 	}
 }
 
@@ -329,6 +396,12 @@ void HitboxDock::_append_stream_text(const String &p_text) {
 		if (backtick_run > 0) {
 			run += String("`").repeat(backtick_run);
 			backtick_run = 0;
+		}
+		if (skipping_fence_tag) {
+			if (c == '\n') {
+				skipping_fence_tag = false;
+			}
+			continue;
 		}
 		run += c;
 	}
@@ -383,12 +456,22 @@ void HitboxDock::_send() {
 	if (text.is_empty()) {
 		return;
 	}
-	if (_get_api_key().is_empty()) {
-		_set_status(TTR("Add your Anthropic API key below first (or set ANTHROPIC_API_KEY)."));
-		key_row->show();
-		key_edit->grab_focus();
+	backend = HitboxBackend::resolve();
+	_update_ui();
+	if (!backend.problem.is_empty()) {
+		_set_status(backend.problem);
+		if (key_row->is_visible()) {
+			key_edit->grab_focus();
+		}
 		return;
 	}
+	if (conversation_backend != -1 && conversation_backend != (int)backend.kind && !messages.is_empty()) {
+		// Histories are not portable between backends (tool blocks differ).
+		messages = Array();
+		yagami_tools = true;
+		_append_line(vformat(TTR("Switched to %s; starting a fresh conversation."), backend.label), _color(SNAME("warning_color")));
+	}
+	conversation_backend = (int)backend.kind;
 
 	Dictionary context_block;
 	context_block["type"] = "text";
@@ -429,6 +512,10 @@ void HitboxDock::_new_chat() {
 	current_blocks = Array();
 	partial_json.clear();
 	tool_rounds = 0;
+	conversation_backend = -1;
+	yagami_tools = true;
+	backend = HitboxBackend::resolve();
+	_update_ui();
 	transcript->clear();
 	transcript_empty = true;
 	render_state = RENDER_NONE;
@@ -445,40 +532,66 @@ void HitboxDock::_new_chat() {
 
 Dictionary HitboxDock::_build_request(Vector<String> &r_headers) {
 	const HitboxModel &model = HITBOX_MODELS[CLAMP(model_button->get_selected(), 0, HITBOX_MODEL_COUNT - 1)];
+	const bool yagami = backend.kind == HitboxBackendConfig::KIND_YAGAMI;
 
 	Dictionary req;
 	req["model"] = model.id;
 	req["max_tokens"] = (int64_t)model.max_tokens;
 	req["stream"] = true;
 
-	Dictionary system_block;
-	system_block["type"] = "text";
-	system_block["text"] = String(HITBOX_SYSTEM_PROMPT);
 	Dictionary cache;
 	cache["type"] = "ephemeral";
-	system_block["cache_control"] = cache;
+	Dictionary system_block;
+	system_block["type"] = "text";
+	system_block["text"] = _system_prompt();
+	if (!yagami) {
+		system_block["cache_control"] = cache;
+	}
 	Array system;
 	system.push_back(system_block);
 	req["system"] = system;
 
-	req["tools"] = HitboxTools::get_tool_definitions();
+	if (!yagami) {
+		req["tools"] = HitboxTools::get_tool_definitions();
+	} else if (yagami_tools) {
+		// Anthropic MCP connector shape; yagami connects Claude Code to it.
+		Dictionary server;
+		server["type"] = "url";
+		server["name"] = "hitbox";
+		server["url"] = mcp_server->get_url();
+		server["authorization_token"] = mcp_server->get_token();
+		Array servers;
+		servers.push_back(server);
+		req["mcp_servers"] = servers;
+		Dictionary toolset;
+		toolset["type"] = "mcp_toolset";
+		toolset["mcp_server_name"] = "hitbox";
+		Array tools;
+		tools.push_back(toolset);
+		req["tools"] = tools;
+	}
 
 	if (model.thinking) {
 		Dictionary thinking;
 		thinking["type"] = "adaptive";
 		thinking["display"] = "summarized";
 		req["thinking"] = thinking;
-		Dictionary output_config;
-		output_config["effort"] = String(EDITOR_GET("hitbox/anthropic/effort"));
-		req["output_config"] = output_config;
+		const String effort = EDITOR_GET("hitbox/anthropic/effort");
+		if (yagami) {
+			req["effort"] = effort; // yagami's extension for Claude Code's effort.
+		} else {
+			Dictionary output_config;
+			output_config["effort"] = effort;
+			req["output_config"] = output_config;
+		}
 	}
-	if (model.fallbacks) {
+	if (model.fallbacks && !yagami) {
 		req["fallbacks"] = "default";
 		r_headers.push_back("anthropic-beta: server-side-fallback-2026-07-01");
 	}
 
-	// Keep exactly one conversation cache breakpoint, on the newest message,
-	// so long tool loops reuse the cached prefix.
+	// Anthropic API: exactly one conversation cache breakpoint, on the newest
+	// message, so long tool loops reuse the cached prefix.
 	for (int i = 0; i < messages.size(); i++) {
 		Dictionary m = messages[i];
 		Array content = m["content"];
@@ -486,7 +599,7 @@ Dictionary HitboxDock::_build_request(Vector<String> &r_headers) {
 			continue;
 		}
 		Dictionary last = content[content.size() - 1];
-		if (i == messages.size() - 1) {
+		if (!yagami && i == messages.size() - 1) {
 			last["cache_control"] = cache;
 		} else {
 			last.erase("cache_control");
@@ -506,17 +619,39 @@ void HitboxDock::_start_request() {
 	render_state = RENDER_NONE;
 	assistant_header_shown = false;
 	in_code_fence = false;
+	skipping_fence_tag = false;
 	backtick_run = 0;
+
+	if (backend.kind == HitboxBackendConfig::KIND_YAGAMI && yagami_tools && !mcp_server->is_running()) {
+		Error mcp_err = mcp_server->start();
+		if (mcp_err != OK) {
+			busy = false;
+			_append_line(vformat(TTR("Could not start the editor's MCP server (error %d)."), (int)mcp_err), _color(SNAME("error_color")));
+			_rollback_to_last_prompt();
+			_update_ui();
+			return;
+		}
+	}
 
 	Vector<String> headers;
 	Dictionary req = _build_request(headers);
-	const String body = JSON::stringify(req);
+
+	HitboxClient::Request request;
+	request.base_url = backend.base_url;
+	request.api_key = backend.api_key;
+	request.body_json = JSON::stringify(req);
+	request.extra_headers = headers;
+	if (backend.kind == HitboxBackendConfig::KIND_YAGAMI) {
+		request.autostart_script = backend.autostart_script;
+		request.autostart_via = backend.autostart_via;
+		request.yagami_config_path = backend.yagami_config_path;
+	}
 
 	if (client.is_null()) {
 		client.instantiate();
 	}
 	client->finish();
-	Error err = client->start(_get_api_key(), body, headers, callable_mp(this, &HitboxDock::_on_client_event));
+	Error err = client->start(request, callable_mp(this, &HitboxDock::_on_client_event));
 	if (err != OK) {
 		busy = false;
 		_append_line(TTR("Could not start the request."), _color(SNAME("error_color")));
@@ -532,12 +667,25 @@ void HitboxDock::_on_client_event(const Dictionary &p_event) {
 	const String type = p_event.get("type", "");
 	if (type == "sse") {
 		_handle_sse(p_event.get("event", Dictionary()));
+	} else if (type == "info") {
+		_append_line(String(p_event.get("message", "")), _color(SNAME("font_disabled_color")));
 	} else if (type == "error") {
 		// Transport or HTTP-level failure: the worker thread is exiting and no
 		// "done" follows, so finish the request here.
+		const int status = (int)(int64_t)p_event.get("status", 0);
+		const String message = p_event.get("message", "Request failed.");
+		if (backend.kind == HitboxBackendConfig::KIND_YAGAMI && yagami_tools && status == 400 && message.contains("mcp_toolset")) {
+			// yagami before 0.10 has no MCP connector: keep chatting without tools.
+			yagami_tools = false;
+			client->finish();
+			_close_block_rendering();
+			_append_line(TTR("This yagami is older than 0.10 and cannot hand Hitbox the editor's tools, so this chat continues without them. Update yagami for the full agent."), _color(SNAME("warning_color")));
+			_start_request();
+			return;
+		}
 		request_failed = true;
 		_close_block_rendering();
-		_append_line(String(p_event.get("message", "Request failed.")), _color(SNAME("error_color")));
+		_append_line(message, _color(SNAME("error_color")));
 		_on_request_finished();
 	} else if (type == "done") {
 		_on_request_finished();
@@ -580,6 +728,35 @@ void HitboxDock::_handle_sse(const Dictionary &p_event) {
 			transcript->push_color(_color(SNAME("font_disabled_color")));
 			render_state = RENDER_THINKING;
 			_set_status(TTR("Thinking..."));
+		} else if (block_type == "mcp_tool_use" || block_type == "mcp_tool_result") {
+			// Tool activity from yagami: already executed through the MCP server.
+			block = cb.duplicate(true);
+			if (!assistant_header_shown) {
+				_append_header("Hitbox");
+				assistant_header_shown = true;
+			}
+			if (block_type == "mcp_tool_use") {
+				const String name = cb.get("name", "");
+				const Dictionary tool_input = cb.get("input", Variant()).get_type() == Variant::DICTIONARY ? Dictionary(cb["input"]) : Dictionary();
+				_append_line(String::utf8("\xe2\x96\xb8 ") + HitboxTools::describe_call(name, tool_input), _color(SNAME("font_disabled_color")));
+				_set_status(vformat(TTR("Running %s..."), name));
+			} else {
+				const bool is_error = cb.get("is_error", false);
+				String text;
+				const Variant result_content = cb.get("content", Variant());
+				if (result_content.get_type() == Variant::STRING) {
+					text = result_content;
+				} else if (result_content.get_type() == Variant::ARRAY) {
+					const Array parts = result_content;
+					for (int i = 0; i < parts.size(); i++) {
+						if (parts[i].get_type() == Variant::DICTIONARY) {
+							text += String(Dictionary(parts[i]).get("text", ""));
+						}
+					}
+				}
+				_append_line(String::utf8(is_error ? "  \xe2\x9c\x97 " : "  \xe2\x86\x92 ") + text.get_slice("\n", 0).left(110), is_error ? _color(SNAME("error_color")) : _color(SNAME("font_disabled_color")));
+				_set_status(TTR("Thinking..."));
+			}
 		} else {
 			// redacted_thinking, fallback markers, anything new: keep verbatim so it replays unchanged.
 			block = cb.duplicate(true);
