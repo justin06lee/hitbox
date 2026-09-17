@@ -12,6 +12,8 @@
 
 #pragma once
 
+#include "hitbox_backend.h"
+
 #include "core/templates/hash_map.h"
 #include "core/variant/array.h"
 #include "editor/docks/editor_dock.h"
@@ -19,6 +21,7 @@
 class Button;
 class HBoxContainer;
 class HitboxClient;
+class HitboxMcpServer;
 class InputEvent;
 class Label;
 class LineEdit;
@@ -27,8 +30,12 @@ class RichTextLabel;
 class TextEdit;
 
 // The Hitbox chat dock: a conversation with an agent that has tools over the
-// open project. Each API request streams on a worker thread; tool calls run
-// on the main thread between requests.
+// open project. Each request streams on a worker thread.
+//
+// Against the Anthropic API, tool calls come back as tool_use blocks and run
+// on the main thread between requests. Against yagami, the dock's MCP server
+// hands the same tools to Claude Code, which calls them inside the turn; the
+// stream reports them as mcp_tool_use / mcp_tool_result blocks.
 class HitboxDock : public EditorDock {
 	GDCLASS(HitboxDock, EditorDock);
 
@@ -50,6 +57,14 @@ class HitboxDock : public EditorDock {
 	Button *send_button = nullptr;
 	Button *stop_button = nullptr;
 
+	// Backend.
+	HitboxMcpServer *mcp_server = nullptr;
+	HitboxBackendConfig backend;
+	// Kind the current conversation was started on, or -1.
+	int conversation_backend = -1;
+	// False once a yagami older than 0.10 refused the MCP toolset.
+	bool yagami_tools = true;
+
 	// Conversation state (Anthropic message shape).
 	Ref<HitboxClient> client;
 	Array messages;
@@ -65,6 +80,8 @@ class HitboxDock : public EditorDock {
 	RenderState render_state = RENDER_NONE;
 	bool assistant_header_shown = false;
 	bool in_code_fence = false;
+	// Swallowing the language tag after an opening fence (```gdscript).
+	bool skipping_fence_tag = false;
 	int backtick_run = 0;
 	bool transcript_empty = true;
 
@@ -81,8 +98,9 @@ class HitboxDock : public EditorDock {
 	void _on_request_finished();
 	void _run_tools(const Array &p_tool_uses);
 	void _rollback_to_last_prompt();
-
-	String _get_api_key() const;
+	void _on_settings_changed();
+	void _show_intro();
+	String _system_prompt() const;
 	int _get_model_index() const;
 	Dictionary _build_request(Vector<String> &r_headers);
 
@@ -104,6 +122,8 @@ public:
 	void send_prompt(const String &p_text);
 	bool is_busy() const { return busy; }
 	String get_transcript_text() const;
+	String get_backend_label() const;
+	int get_mcp_call_count() const;
 
 	HitboxDock();
 	~HitboxDock();

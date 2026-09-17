@@ -64,9 +64,9 @@ update: stop
 	$(MAKE) build install run
 
 # Starts the editor headless on misc/hitbox/smoke_project; its plugin sends one
-# prompt through the Hitbox dock and prints the transcript. Needs a key in
-# ANTHROPIC_API_KEY or in the editor settings; without one it exercises the
-# error path (HTTP 401) end to end.
+# prompt that needs a tool call through the Hitbox dock, prints the transcript
+# and PASS or FAIL. Uses whichever backend the dock resolves: yagami (started
+# on demand) or the Anthropic API.
 smoke: build
 	$(BINARY) --headless --editor --path misc/hitbox/smoke_project 2>&1 | grep HITBOX_SMOKE
 

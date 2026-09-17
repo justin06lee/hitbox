@@ -5,7 +5,7 @@
 # hitbox
 
 **Cursor for game development: the Godot editor with an AI agent compiled in.**<br>
-*A fork of Godot 4.7, not a plugin. The agent reads your project, edits scenes and scripts, runs the game and reads what it printed.*
+*A fork of Godot 4.7, not a plugin. The agent reads your project, edits scenes and scripts, runs the game and reads what it printed. Runs on your Claude Code sign-in through yagami, or on an Anthropic API key.*
 
 </div>
 
@@ -39,28 +39,46 @@ make                      # build, bundle Hitbox.app, install to /Applications, 
 | `make build` | Compile the editor binary only, into `bin/`. |
 | `make install` | Bundle and install without launching. |
 | `make update` | Stop a running Hitbox, remove it, rebuild, reinstall and relaunch. |
-| `make smoke` | Headless editor run that sends one prompt through the dock and prints the transcript. With no API key it exercises the error path. |
+| `make smoke` | Headless editor run that sends two prompts through the dock, the first needing a tool call and the second needing its result, then prints the transcript and PASS or FAIL. |
 
 The first build takes a while; later builds only recompile what changed. The macOS build uses Metal and does not need the Vulkan SDK. Other platforms use Godot's own build line, for example `scons platform=linuxbsd target=editor`; everything Hitbox adds is platform independent, only the Makefile is macOS specific.
 
 ## Setup
 
-Hitbox talks to the Anthropic API directly from the editor. Give it a key in any of these ways:
+Hitbox needs somewhere to send the agent's requests. It picks one on its own, and **Editor Settings > Hitbox > Backend > Mode** overrides the choice.
 
-1. Paste it into the field at the bottom of the Hitbox dock the first time you open it.
-2. Editor Settings, then **Hitbox > Anthropic > API Key**.
-3. Set the `ANTHROPIC_API_KEY` environment variable before launching.
+**yagami, on your Claude Code sign-in.** [yagami](https://github.com/justin06lee/yagami) serves the Messages API from the `claude` CLI you are already logged into, so no API key is needed. Hitbox reads yagami's URL and key from `~/.config/yagami/config.json` (or `$YAGAMI_CONFIG_DIR`). If the server isn't running when you send a message, Hitbox starts it: an installed `yagami` binary first, then the npm package through `bunx @justin06lee/yagami` or `npx`. Any of these installs work:
 
-The model picker at the top of the dock switches between Claude Opus 5 (the default), Claude Sonnet 5, Claude Fable 5.1 and Claude Haiku 4.5. The reasoning effort and the maximum number of tool rounds per message live under the same settings section.
+```sh
+bun add -g @justin06lee/yagami     # from npm
+cd yagami && make                  # from a checkout
+```
 
-Hitbox keeps its own editor settings, separate from Godot's, so installing it next to Godot does not touch your Godot configuration.
+With yagami 0.10 or newer the agent has every editor tool. Older versions can't pass tools through, so Hitbox says so in the dock and keeps chatting without them.
+
+**The Anthropic API, on an API key.** Paste a key into the field in the dock, set it in Editor Settings under **Hitbox > Anthropic > API Key**, or export `ANTHROPIC_API_KEY` before launching.
+
+In auto mode, a key typed into Hitbox wins. Otherwise yagami wins whenever it is installed or configured. Next comes an `ANTHROPIC_API_KEY` from the environment. Last, if the Claude Code CLI and `bunx` or `npx` are present, Hitbox runs yagami straight from npm.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Hitbox > Backend > Mode | `auto` | `auto`, `yagami` or `anthropic_api`. |
+| Hitbox > Yagami > Url | from yagami's config | Base URL of the yagami server. |
+| Hitbox > Yagami > Api Key | from yagami's config | The `ygm_` key. |
+| Hitbox > Yagami > Auto Start | on | Start yagami when nothing answers on a local URL. |
+| Hitbox > Anthropic > Model | Claude Opus 5 | Also switchable from the dock's picker. Applies to both backends. |
+| Hitbox > Anthropic > Effort | `high` | Reasoning effort. Applies to both backends. |
+
+The model picker offers Claude Opus 5, Claude Sonnet 5, Claude Fable 5.1 and Claude Haiku 4.5. Hitbox keeps its own editor settings, separate from Godot's, so installing it next to Godot does not touch your Godot configuration.
 
 ## How it is built
 
 Everything Hitbox adds lives in one engine module, `modules/hitbox/`:
 
-- `hitbox_dock.cpp` is the chat dock and the agent loop. Each API request streams on a worker thread; tool calls run on the main thread between requests, so they can touch editor state safely.
-- `hitbox_client.cpp` is a small streaming client for the Anthropic Messages API over Godot's own HTTPS stack. No external dependencies.
+- `hitbox_dock.cpp` is the chat dock and the agent loop. Each request streams on a worker thread. Against the Anthropic API, tool calls come back to the dock and run on the main thread between requests.
+- `hitbox_mcp_server.cpp` is a small MCP server, speaking JSON-RPC over streamable HTTP, that serves the same tools to yagami. It listens on `127.0.0.1` on a random port behind a per-session bearer token. Hitbox sends it with each request in the Anthropic MCP connector shape, yagami connects Claude Code to it, and the model calls the editor's tools inside the turn. Requests are polled on the main thread, so tools touch editor state safely either way.
+- `hitbox_backend.cpp` decides between yagami and the Anthropic API and discovers yagami's URL and key.
+- `hitbox_client.cpp` is a small streaming client for the Messages API over Godot's own HTTP stack, and starts yagami when it isn't running. No external dependencies.
 - `hitbox_tools.cpp` defines the tools the model sees and implements them against the editor: file system, scene tree, undo history, run bar, output log and the class reference.
 - `hitbox_editor_plugin.cpp` registers the editor settings and mounts the dock.
 
